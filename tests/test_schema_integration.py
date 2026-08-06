@@ -187,9 +187,12 @@ def test_refresh_daily_sales_is_idempotent_and_correct(db):
             (seeded["order_id"], seeded["order_date"], seeded["product_id"]),
         )
 
+    # Rebuilding the same range twice must produce the same row count. The
+    # count is not asserted to be 1: other data may already be loaded, so the
+    # value-level assertions below are scoped to this test's own product.
     first = _scalar(db, "SELECT refresh_daily_sales('2026-03-01', '2026-03-31')")
     second = _scalar(db, "SELECT refresh_daily_sales('2026-03-01', '2026-03-31')")
-    assert first == second == 1
+    assert first == second
 
     with db.cursor() as cur:
         cur.execute(
@@ -217,7 +220,14 @@ def test_cancelled_orders_are_excluded_from_revenue(db):
             (seeded["order_id"], seeded["order_date"], seeded["product_id"]),
         )
 
-    rows = _scalar(db, "SELECT refresh_daily_sales('2026-03-01', '2026-03-31')")
+    _scalar(db, "SELECT refresh_daily_sales('2026-03-01', '2026-03-31')")
+    # Scoped to this test's own product: the cancelled order contributed no
+    # rollup row, regardless of what else is loaded in the database.
+    rows = _scalar(
+        db,
+        "SELECT count(*) FROM daily_sales_aggregation WHERE product_id = %s",
+        (seeded["product_id"],),
+    )
     assert rows == 0
 
 

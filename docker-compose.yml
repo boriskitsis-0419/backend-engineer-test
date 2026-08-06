@@ -99,6 +99,9 @@ services:
       - ./tests:/app/tests:ro
       - ./scripts:/app/scripts:ro
       - ./migrations:/app/migrations:ro
+      # The ETL integration tests reload data/sample on teardown so the demo
+      # database is left populated rather than holding test fixtures.
+      - ./data:/app/data:ro
     command: ["pytest"]
     profiles: ["tools"]
     restart: "no"

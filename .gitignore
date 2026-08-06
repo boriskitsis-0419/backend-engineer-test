@@ -30,3 +30,4 @@ _pb_output/
 .idea/
 .vscode/
 .DS_Store
+data/rejects/

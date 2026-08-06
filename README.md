@@ -72,6 +72,49 @@ Highlights:
 - `daily_sales_aggregation` and `customer_metrics` are real tables refreshed by
   idempotent functions, not views recomputed per query.
 
+## ETL
+
+```bash
+docker compose run --rm etl                                    # full load of data/sample
+docker compose run --rm etl python -m ecommerce_pipeline.etl.pipeline \
+    --source /app/data/sample --incremental --reject-dir /app/data/rejects
+```
+
+Each entity flows through the same four stages:
+
+1. **Extract** — the CSV is read in bounded chunks, every column as text.
+   Letting pandas infer types would change them between chunks (an integer
+   column with one blank becomes float in one chunk and int in the next).
+2. **Validate** — rules mirror the schema's CHECK constraints. A failing row is
+   quarantined with the name of the first rule it broke, not fatal to the
+   batch. Rejects are written to `--reject-dir` for inspection and replay.
+3. **Resolve references** — rows whose foreign-key parent is missing are
+   removed from staging. The database enforces these anyway, but it does so by
+   aborting the whole `INSERT`: one order pointing at a deleted customer would
+   otherwise take the entire load down with it.
+4. **Load** — `COPY` into a staging table shaped by
+   `CREATE TEMP TABLE ... AS SELECT ... WITH NO DATA`, then one
+   `INSERT ... SELECT ... ON CONFLICT DO UPDATE` into the target.
+
+Then `sync_identity_sequences()`, `ANALYZE`, the SQL transformations, the
+data-quality checks, and finally the watermarks — which advance only after
+everything else succeeded, so a failed run re-reads the same window.
+
+Loading the whole entity into staging before the upsert also fixes an ordering
+hazard: `product_categories` references itself, so a subcategory in chunk 2
+whose parent is in chunk 1 would fail a per-chunk load.
+
+**Error handling.** Every load is an idempotent upsert keyed on the primary
+key, so re-running is always safe. Entities commit independently rather than
+wrapping 20M rows in a single transaction, which would hold one snapshot open
+for the whole load and bloat WAL. Run history, rejects and check results are
+recorded in `etl_run`, `etl_watermark` and `data_quality_check`.
+
+```sql
+SELECT run_id, workflow, status, rows_extracted, rows_loaded, rows_rejected
+FROM etl_run ORDER BY started_at DESC LIMIT 5;
+```
+
 ## Layout
 
 ```
