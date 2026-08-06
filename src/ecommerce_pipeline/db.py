@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import psycopg
-from psycopg_pool import ConnectionPool
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from tenacity import retry, retry_if_exception_type, stop_after_delay, wait_fixed
 
 from .config import Settings, get_settings
@@ -15,6 +15,7 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 _pool: ConnectionPool | None = None
+_async_pool: AsyncConnectionPool | None = None
 
 
 @retry(
@@ -86,3 +87,35 @@ def close_pool() -> None:
         _pool.close()
         _pool = None
         logger.info("closed connection pool")
+
+
+async def get_async_pool() -> AsyncConnectionPool:
+    """Return the process-wide async pool, opening it on first use.
+
+    The GraphQL layer is async because DataLoader batching is: a loader
+    gathers the keys requested across a tick of the event loop and issues one
+    query for all of them. That only works if the resolvers awaiting it can
+    yield, which rules out a synchronous driver.
+    """
+    global _async_pool
+    if _async_pool is None:
+        settings = get_settings()
+        _async_pool = AsyncConnectionPool(
+            conninfo=settings.dsn,
+            min_size=1,
+            max_size=10,
+            max_idle=300,
+            open=False,
+            name="ecommerce-api-async",
+        )
+        await _async_pool.open(wait=True, timeout=30)
+        logger.info("opened async connection pool (max_size=%d)", 10)
+    return _async_pool
+
+
+async def close_async_pool() -> None:
+    global _async_pool
+    if _async_pool is not None:
+        await _async_pool.close()
+        _async_pool = None
+        logger.info("closed async connection pool")

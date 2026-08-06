@@ -115,6 +115,53 @@ SELECT run_id, workflow, status, rows_extracted, rows_loaded, rows_rejected
 FROM etl_run ORDER BY started_at DESC LIMIT 5;
 ```
 
+## GraphQL API
+
+Served at <http://localhost:8000/graphql>, with GraphiQL in a browser.
+
+| Query | Purpose |
+| --- | --- |
+| `productSales` | Sales per product over a period, filterable and sortable |
+| `customerPurchaseHistory` | One customer's orders, keyset-paginated |
+| `topProductsByCategory` | Top N products within each top-level category |
+| `salesTrends` | Revenue and units bucketed by day/week/month/quarter/year |
+| `products`, `customers`, `product`, `customer` | Catalogue and customer lookups |
+| `updateProduct` *(mutation)* | Partial update; omitted fields are untouched |
+
+```graphql
+{
+  productSales(period: {fromDate: "2026-01-01", toDate: "2026-06-30"},
+               sort: REVENUE, page: {limit: 5}) {
+    pageInfo { totalCount hasNextPage }
+    items { productName sku categoryName unitsSold netRevenue }
+  }
+}
+```
+
+### Query performance
+
+**Reads hit pre-aggregated tables.** Every analytics query reads
+`daily_sales_aggregation` or `customer_metrics`, never raw `order_items`.
+"Top products this quarter" costs a scan of selling-days × products instead of
+a scan of every line item ever recorded.
+
+**N+1 is handled with DataLoaders.** Nested fields (`product`, `category`,
+`customer`, order `items`) batch per request. Measured with
+`log_statement='all'`, a 50-row page requesting `product { category { name } }`
+issues **3 queries, not 101** — the nested fields collapse to one
+`WHERE product_id = ANY($1)` and one `WHERE category_id = ANY($1)`.
+
+**Purchase history uses keyset pagination.** A history is unbounded, and
+`OFFSET` makes the database walk and discard every skipped row, so page 500
+costs 500 pages of work. Seeking on `(order_date, order_id)` is one index
+descent per page and stays correct when rows are inserted between requests.
+Both columns are needed because `order_date` alone is not unique.
+
+**Cost guards.** Page size is clamped to `API_MAX_PAGE_SIZE`, an absent date
+range defaults to the last 90 days rather than all time, query depth is capped
+at 12, and sort fields resolve through a fixed allow-list rather than being
+interpolated from user input.
+
 ## Layout
 
 ```
