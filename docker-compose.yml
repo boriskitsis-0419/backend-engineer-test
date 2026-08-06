@@ -83,6 +83,25 @@ services:
       retries: 10
       start_period: 15s
 
+  # Test runner:  docker compose run --rm test
+  # Mounts the working tree so a test edit does not require an image rebuild.
+  # Integration tests skip themselves when no database is reachable.
+  test:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./migrations:/app/migrations:ro
+    command: ["pytest"]
+    profiles: ["tools"]
+    restart: "no"
+
   # On-demand ETL run:  docker compose run --rm etl
   etl:
     build: .
