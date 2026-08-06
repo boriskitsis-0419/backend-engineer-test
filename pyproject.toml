@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecommerce-pipeline"
+version = "0.1.0"
+description = "E-commerce analytics ETL pipeline, GraphQL API and Flyte orchestration"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    # psycopg 3 is used rather than psycopg2 for its first-class COPY support
+    # (cursor.copy()), which the bulk loader depends on.
+    "psycopg[binary]>=3.1,<4",
+    "psycopg-pool>=3.2,<4",
+    "pandas>=2.0,<3",
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "strawberry-graphql[fastapi]>=0.220",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "tenacity>=8.2",
+]
+
+[project.optional-dependencies]
+# Only needed to regenerate the CSV fixtures; keeps faker/tqdm out of the
+# runtime image.
+datagen = [
+    "numpy>=1.26",
+    "faker>=24.0",
+    "tqdm>=4.66",
+]
+# flytekit pulls a large dependency tree and is not required to run the ETL or
+# the API directly, so it is opt-in.
+flyte = [
+    "flytekit>=1.13",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[project.scripts]
+ecommerce-migrate = "ecommerce_pipeline.migrations.runner:main"
+ecommerce-etl = "ecommerce_pipeline.etl.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+    "integration: tests that require a live PostgreSQL instance",
+]
+
+[tool.coverage.run]
+source = ["src/ecommerce_pipeline"]

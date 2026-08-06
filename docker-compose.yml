@@ -1,0 +1,102 @@
+name: ecommerce-pipeline
+
+x-app-env: &app-env
+  POSTGRES_USER: ${POSTGRES_USER:-ecommerce}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecommerce}
+  POSTGRES_DB: ${POSTGRES_DB:-ecommerce}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  ETL_BATCH_SIZE: ${ETL_BATCH_SIZE:-50000}
+  DATA_DIR: ${DATA_DIR:-/app/data/sample}
+  API_MAX_PAGE_SIZE: ${API_MAX_PAGE_SIZE:-200}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ecommerce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecommerce}
+      POSTGRES_DB: ${POSTGRES_DB:-ecommerce}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Tuned for bulk ingest rather than OLTP: a large maintenance_work_mem
+    # speeds up index builds after COPY, and a high max_wal_size keeps the
+    # loader from stalling on checkpoints mid-batch.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - work_mem=32MB
+      - -c
+      - synchronous_commit=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ecommerce} -d ${POSTGRES_DB:-ecommerce}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One-shot migration runner. The API waits for this to exit cleanly, so a
+  # `docker compose up` always lands on a fully migrated database.
+  migrate:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/app/migrations:ro
+    command: ["python", "-m", "ecommerce_pipeline.migrations.runner", "up"]
+    restart: "no"
+
+  api:
+    build: .
+    environment: *app-env
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - ecommerce_pipeline.api.app:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # On-demand ETL run:  docker compose run --rm etl
+  etl:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "ecommerce_pipeline.etl.pipeline", "--source", "/app/data/sample"]
+    profiles: ["tools"]
+    restart: "no"
+
+volumes:
+  pgdata:

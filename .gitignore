@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environment
+.env
+
+# Generated data — full-scale CSVs are ~1GB and are never committed.
+# Sample CSVs under data/sample/ are committed (see .gitignore rules below).
+data/full/
+ecommerce_data/
+
+# Flyte
+_pb_output/
+.flyte/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
