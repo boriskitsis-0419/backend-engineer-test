@@ -50,7 +50,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
 addopts = "-q"
 markers = [
     "integration: tests that require a live PostgreSQL instance",

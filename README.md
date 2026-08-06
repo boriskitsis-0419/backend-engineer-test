@@ -23,6 +23,32 @@ curl localhost:8000/health
 The API is served on <http://localhost:8000>, Postgres is published on
 `localhost:5433` (host port chosen to avoid clashing with a local Postgres).
 
+## Data
+
+The brief refers to provided CSVs; they are produced by a generator rather than
+shipped. A ~3.5MB sample set is committed under [`data/sample/`](data/sample/)
+so the demo and tests are reproducible without a generation step.
+
+```bash
+pip install -e ".[datagen]"
+python scripts/generate_data.py --scale sample --output data/sample   # 8k orders
+python scripts/generate_data.py --scale full   --output data/full     # 20M items
+```
+
+| Scale | Orders | Order items | Time | Peak RSS | Output |
+| --- | --- | --- | --- | --- | --- |
+| `sample` | 8,000 | 32,742 | 0.6s | ~120MB | 3.5MB |
+| `medium` | 243,910 | 1,000,000 | 5.6s | 537MB | 107MB |
+| `full` | 4,878,087 | 19,999,998 | 96.7s | 850MB | 2.2GB |
+
+[`scripts/generate_data.py`](scripts/generate_data.py) replaces the supplied
+`data-generator.py`, which could not finish at the stated scale: its inner loop
+rescanned a 1M-row DataFrame four times per order across 5M orders, and it
+buffered all 20M order items in memory before writing. The replacement is
+vectorised with numpy and streams to disk in bounded chunks, so peak memory is
+set by `--chunk-size` rather than by the total row count. Output is
+deterministic for a given `--seed` and `--end-date`.
+
 ## Schema
 
 The schema lives in [`migrations/`](migrations/) as numbered, forward-only SQL

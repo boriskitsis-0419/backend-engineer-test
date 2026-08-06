@@ -97,6 +97,7 @@ services:
     volumes:
       - ./src:/app/src:ro
       - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
       - ./migrations:/app/migrations:ro
     command: ["pytest"]
     profiles: ["tools"]
