@@ -16,12 +16,70 @@ Requires Docker with the Compose plugin. Nothing else — Python, Postgres and
 
 ```bash
 cp .env.example .env
-docker compose up -d --build     # postgres -> migrations -> API
+docker compose up -d --build          # postgres -> migrations -> API
+docker compose run --rm etl           # load the committed sample data
 curl localhost:8000/health
 ```
 
-The API is served on <http://localhost:8000>, Postgres is published on
-`localhost:5433` (host port chosen to avoid clashing with a local Postgres).
+The API is served on <http://localhost:8000> (GraphiQL at `/graphql`), and
+Postgres on `localhost:5433` — a host port chosen to avoid clashing with a
+local Postgres.
+
+## Demo
+
+The three pieces the brief asks for, end to end.
+
+**1. ETL processing the sample data.** `docker compose run --rm etl` loads
+44,242 rows in about 7 seconds and prints a summary:
+
+```
+entity                extracted  rejected  inserted  updated  seconds
+product_categories          500         0       500        0      0.1
+products                  1,000         0     1,000        0      0.1
+customers                 2,000         0     2,000        0      0.1
+orders                    8,000         0     8,000        0      0.7
+order_items              32,742         0    32,742        0      4.7
+total                    44,242         0    44,242
+
+transformations: 27,896 daily rollup rows, 2,000 customer metric rows
+data quality: 9 passed, 0 warning(s), 0 error(s)
+```
+
+Re-running it reports 0 inserts and 44,242 updates — the load is an idempotent
+upsert.
+
+**2. GraphQL queries.** Open <http://localhost:8000/graphql> and try:
+
+```graphql
+{
+  salesTrends(period: {fromDate: "2026-01-01", toDate: "2026-06-30"},
+              granularity: MONTH) {
+    bucketStart netRevenue orderCount
+  }
+  topProductsByCategory(period: {fromDate: "2026-01-01", toDate: "2026-06-30"},
+                        limitPerCategory: 3) {
+    rank categoryName productName netRevenue
+  }
+}
+```
+
+Or from a shell:
+
+```bash
+curl -s localhost:8000/graphql -H 'Content-Type: application/json' -d '{"query":
+  "{ productSales(period:{fromDate:\"2026-01-01\",toDate:\"2026-06-30\"}, page:{limit:3})
+     { pageInfo { totalCount } items { productName netRevenue unitsSold } } }"}'
+```
+
+**3. Flyte workflow.** `docker compose run --rm workflow` runs
+`ensure_schema → verify_source → load_data → transform_data → quality_gate →
+finalise` locally, no cluster required, and ends with:
+
+```
+run 60: extracted=44242 loaded=1500 rejected=0 checks_passed=9 warnings=0
+```
+
+**Tests:** `docker compose run --rm test` — 146 tests, roughly 50 seconds.
 
 ## Data
 
@@ -141,9 +199,14 @@ Served at <http://localhost:8000/graphql>, with GraphiQL in a browser.
 ### Query performance
 
 **Reads hit pre-aggregated tables.** Every analytics query reads
-`daily_sales_aggregation` or `customer_metrics`, never raw `order_items`.
-"Top products this quarter" costs a scan of selling-days × products instead of
-a scan of every line item ever recorded.
+`daily_sales_aggregation` or `customer_metrics`, never raw `order_items`. The
+rollup has the `orders`↔`order_items` join and the revenue-bearing status
+filter already applied, and rows a third the width. Measured on the sample
+set, "top products over six months" runs in **6.9ms** against the rollup
+versus **13.8ms** against raw `order_items`. At this scale the rollup
+compresses little (27,896 rows against 32,742) because most products sell once
+a day — the win is the eliminated join and the narrower rows. Compression, and
+the gap, grow with order density per product-day.
 
 **N+1 is handled with DataLoaders.** Nested fields (`product`, `category`,
 `customer`, order `items`) batch per request. Measured with
@@ -186,17 +249,33 @@ Scheduling, alerting thresholds and failure handling are documented in
 ## Layout
 
 ```
-migrations/                 numbered, forward-only SQL migrations
+migrations/                   nine numbered, forward-only SQL migrations
 src/ecommerce_pipeline/
-  config.py                 environment-backed settings
-  db.py                     connection handling + pooling
-  logging_config.py         shared logging setup
-  migrations/runner.py      applies migrations/*.sql, tracks checksums
-  api/                      FastAPI + GraphQL
-scripts/                    data generation and operational helpers
-tests/                      unit and integration tests
-docs/                       technical write-up
-data/sample/                committed sample CSVs used by the demo
+  config.py                   environment-backed settings
+  db.py                       sync + async connection pooling
+  logging_config.py           shared logging setup
+  migrations/runner.py        applies migrations/*.sql, tracks checksums
+  etl/
+    spec.py                   entity -> table mapping, keys, foreign keys
+    extract.py                chunked CSV reading
+    validate.py               per-entity rules, row quarantine
+    load.py                   COPY -> staging -> upsert, orphan resolution
+    transform.py              aggregate + materialized view refresh
+    quality.py                nine data-quality checks
+    pipeline.py               orchestration + CLI
+  api/
+    repository.py             the SQL behind the resolvers
+    types.py                  GraphQL types
+    loaders.py                DataLoaders (N+1 avoidance)
+    schema.py                 queries, mutation, cost guards
+    app.py                    FastAPI app
+  orchestration/
+    steps.py                  pipeline stages as callable units
+    workflows.py              Flyte tasks + workflow
+scripts/generate_data.py      vectorised CSV fixture generator
+tests/                        146 unit and integration tests
+docs/                         technical document + orchestration guide
+data/sample/                  committed sample CSVs used by the demo
 ```
 
 ## Common commands
@@ -207,6 +286,8 @@ data/sample/                committed sample CSVs used by the demo
 | Migration status | `docker compose run --rm migrate python -m ecommerce_pipeline.migrations.runner status` |
 | Apply migrations | `docker compose run --rm migrate` |
 | Run the ETL | `docker compose run --rm etl` |
+| Run the Flyte workflow | `docker compose run --rm workflow` |
+| Regenerate sample data | `python scripts/generate_data.py --scale sample --output data/sample` |
 | Open a psql shell | `docker compose exec postgres psql -U ecommerce -d ecommerce` |
 | Run the tests | `docker compose run --rm test` |
 | Tear down (keep data) | `docker compose down` |
@@ -218,6 +299,29 @@ All settings are environment variables, documented in
 [`.env.example`](.env.example) and parsed by
 [`config.py`](src/ecommerce_pipeline/config.py). The defaults work as-is for
 local development.
+
+## Documentation
+
+- [`docs/technical-document.md`](docs/technical-document.md) — database design,
+  ETL architecture, query optimisation, scaling and deployment.
+- [`docs/orchestration.md`](docs/orchestration.md) — scheduling, the
+  three-layer monitoring model with alert thresholds, and failure recovery.
+
+## Notes on the supplied materials
+
+Both files that came with the brief had defects that had to be fixed before
+anything could run. They are preserved unmodified in the first commit so the
+changes are visible as diffs:
+
+- `database-schema.sql` did not load. `orders` was partitioned by `order_date`
+  while declaring `order_id SERIAL PRIMARY KEY`; PostgreSQL requires the
+  partition key in every unique constraint. Verified against `postgres:14`:
+  it aborts at line 107 and cascades into 13 further errors.
+- `data-generator.py` could not finish at its stated scale. It rescanned a
+  1M-row DataFrame four times per order across 5M orders, and buffered 20M
+  order items in memory before writing.
+
+The technical document lists the full set of corrections.
 
 ## Development outside Docker
 

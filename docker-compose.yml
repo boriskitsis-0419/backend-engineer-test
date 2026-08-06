@@ -50,6 +50,7 @@ services:
   # `docker compose up` always lands on a fully migrated database.
   migrate:
     build: .
+    image: ecommerce-pipeline:latest
     environment: *app-env
     depends_on:
       postgres:
@@ -61,6 +62,7 @@ services:
 
   api:
     build: .
+    image: ecommerce-pipeline:latest
     environment: *app-env
     ports:
       - "${API_HOST_PORT:-8000}:8000"
@@ -88,6 +90,7 @@ services:
   # Integration tests skip themselves when no database is reachable.
   test:
     build: .
+    image: ecommerce-pipeline:latest
     environment: *app-env
     depends_on:
       postgres:
@@ -110,6 +113,7 @@ services:
   #   docker compose run --rm workflow
   workflow:
     build: .
+    image: ecommerce-pipeline:latest
     environment: *app-env
     depends_on:
       postgres:
@@ -129,6 +133,7 @@ services:
   # On-demand ETL run:  docker compose run --rm etl
   etl:
     build: .
+    image: ecommerce-pipeline:latest
     environment: *app-env
     depends_on:
       postgres:
