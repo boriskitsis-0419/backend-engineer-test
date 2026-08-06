@@ -106,6 +106,26 @@ services:
     profiles: ["tools"]
     restart: "no"
 
+  # Flyte workflow, executed locally (no cluster required):
+  #   docker compose run --rm workflow
+  workflow:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    command:
+      - python
+      - -m
+      - ecommerce_pipeline.orchestration.workflows
+      - --source
+      - /app/data/sample
+      - --incremental
+    profiles: ["tools"]
+    restart: "no"
+
   # On-demand ETL run:  docker compose run --rm etl
   etl:
     build: .

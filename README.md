@@ -162,6 +162,27 @@ range defaults to the last 90 days rather than all time, query depth is capped
 at 12, and sort fields resolve through a fixed allow-list rather than being
 interpolated from user input.
 
+## Orchestration (Flyte)
+
+```bash
+docker compose run --rm workflow          # incremental run, no cluster needed
+```
+
+```
+ensure_schema → verify_source → load_data → transform_data → quality_gate → finalise
+```
+
+The Flyte tasks are thin wrappers over
+[`steps.py`](src/ecommerce_pipeline/orchestration/steps.py), so the same
+stages are testable without flytekit. They are separate tasks rather than one
+because it makes failures attributable, retries cheap (retrying a failed check
+re-runs seconds of SQL, not a 20M-row `COPY`), and resource requests
+right-sized. Retries are safe because every stage is idempotent.
+
+The quality gate fails the workflow on an error-severity check; exit code `3`.
+Scheduling, alerting thresholds and failure handling are documented in
+[`docs/orchestration.md`](docs/orchestration.md).
+
 ## Layout
 
 ```

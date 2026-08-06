@@ -18,7 +18,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 RUN mkdir -p src/ecommerce_pipeline \
     && touch src/ecommerce_pipeline/__init__.py \
-    && pip install --no-cache-dir -e ".[dev,datagen]"
+    && pip install --no-cache-dir -e ".[dev,datagen,flyte]"
 
 COPY src/ ./src/
 COPY migrations/ ./migrations/
